@@ -1,0 +1,122 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+
+contract NFTStaking is Initializable, UUPSUpgradeable, Ownable, Pausable {
+    IERC20 public rewardToken;
+    IERC721 public stakableNFT;
+    uint256 public rewardPerBlock;
+    uint256 public delayPeriod;
+
+    struct StakerInfo {
+        uint256[] stakedNFTs;
+        uint256 rewardDebt;
+        uint256 lastClaimBlock;
+    }
+
+    mapping(address => StakerInfo) public stakers;
+    mapping(uint256 => address) public nftOwners;
+    mapping(uint256 => uint256) public unbondingTime;
+
+    event Staked(address indexed user, uint256[] tokenIds);
+    event Unstaked(address indexed user, uint256[] tokenIds);
+    event RewardsClaimed(address indexed user, uint256 rewardAmount);
+
+    function initialize(IERC20 _rewardToken, IERC721 _stakableNFT, uint256 _rewardPerBlock, uint256 _delayPeriod) initializer public {
+        rewardToken = _rewardToken;
+        stakableNFT = _stakableNFT;
+        rewardPerBlock = _rewardPerBlock;
+        delayPeriod = _delayPeriod;
+        __Ownable_init();
+    }
+
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+
+    function stake(uint256[] calldata tokenIds) external whenNotPaused {
+        StakerInfo storage staker = stakers[msg.sender];
+        uint256 totalRewards = 0;
+
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            uint256 tokenId = tokenIds[i];
+            stakableNFT.transferFrom(msg.sender, address(this), tokenId);
+            staker.stakedNFTs.push(tokenId);
+            nftOwners[tokenId] = msg.sender;
+        }
+
+        totalRewards = staker.stakedNFTs.length * rewardPerBlock * (block.number - staker.lastClaimBlock);
+        staker.rewardDebt += totalRewards;
+        staker.lastClaimBlock = block.number;
+
+        emit Staked(msg.sender, tokenIds);
+    }
+
+    function unstake(uint256[] calldata tokenIds) external whenNotPaused {
+        StakerInfo storage staker = stakers[msg.sender];
+        uint256 totalRewards = 0;
+
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            uint256 tokenId = tokenIds[i];
+            require(nftOwners[tokenId] == msg.sender, "Not the staker");
+            stakableNFT.transferFrom(address(this), msg.sender, tokenId);
+            unbondingTime[tokenId] = block.timestamp;
+            staker.stakedNFTs = _removeNFT(staker.stakedNFTs, tokenId);
+        }
+
+        totalRewards = staker.stakedNFTs.length * rewardPerBlock * (block.number - staker.lastClaimBlock);
+        staker.rewardDebt += totalRewards;
+        staker.lastClaimBlock = block.number;
+
+        emit Unstaked(msg.sender, tokenIds);
+    }
+
+    function claimRewards() external whenNotPaused {
+        StakerInfo storage staker = stakers[msg.sender];
+        require(block.timestamp >= staker.lastClaimBlock + delayPeriod, "Delay period not met");
+
+        uint256 totalRewards = staker.rewardDebt;
+        staker.rewardDebt = 0;
+        staker.lastClaimBlock = block.number;
+
+        rewardToken.transfer(msg.sender, totalRewards);
+
+        emit RewardsClaimed(msg.sender, totalRewards);
+    }
+
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
+    function updateRewardPerBlock(uint256 _rewardPerBlock) external onlyOwner {
+        rewardPerBlock = _rewardPerBlock;
+    }
+
+    function updateDelayPeriod(uint256 _delayPeriod) external onlyOwner {
+        delayPeriod = _delayPeriod;
+    }
+
+    function _removeNFT(uint256[] storage array, uint256 value) internal returns (uint256[] storage) {
+        uint256 index = 0;
+        for (uint256 i = 0; i < array.length; i++) {
+            if (array[i] == value) {
+                index = i;
+                break;
+            }
+        }
+
+        array[index] = array[array.length - 1];
+        array.pop();
+
+        return array;
+    }
+}
