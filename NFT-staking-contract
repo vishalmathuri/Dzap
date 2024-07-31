@@ -7,7 +7,6 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 
 contract NFTStaking is Initializable, UUPSUpgradeable, Ownable, Pausable {
     IERC20 public rewardToken;
@@ -29,19 +28,28 @@ contract NFTStaking is Initializable, UUPSUpgradeable, Ownable, Pausable {
     event Unstaked(address indexed user, uint256[] tokenIds);
     event RewardsClaimed(address indexed user, uint256 rewardAmount);
 
-    function initialize(IERC20 _rewardToken, IERC721 _stakableNFT, uint256 _rewardPerBlock, uint256 _delayPeriod) initializer public {
+    function initialize(
+        IERC20 _rewardToken,
+        IERC721 _stakableNFT,
+        uint256 _rewardPerBlock,
+        uint256 _delayPeriod
+    ) public initializer {
         rewardToken = _rewardToken;
         stakableNFT = _stakableNFT;
         rewardPerBlock = _rewardPerBlock;
         delayPeriod = _delayPeriod;
         __Ownable_init();
+        __Pausable_init();
+        __UUPSUpgradeable_init();
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     function stake(uint256[] calldata tokenIds) external whenNotPaused {
+        require(tokenIds.length > 0, "No NFTs provided for staking");
+
         StakerInfo storage staker = stakers[msg.sender];
-        uint256 totalRewards = 0;
+        uint256 totalRewards = _calculateRewards(staker);
 
         for (uint256 i = 0; i < tokenIds.length; i++) {
             uint256 tokenId = tokenIds[i];
@@ -50,7 +58,6 @@ contract NFTStaking is Initializable, UUPSUpgradeable, Ownable, Pausable {
             nftOwners[tokenId] = msg.sender;
         }
 
-        totalRewards = staker.stakedNFTs.length * rewardPerBlock * (block.number - staker.lastClaimBlock);
         staker.rewardDebt += totalRewards;
         staker.lastClaimBlock = block.number;
 
@@ -58,18 +65,23 @@ contract NFTStaking is Initializable, UUPSUpgradeable, Ownable, Pausable {
     }
 
     function unstake(uint256[] calldata tokenIds) external whenNotPaused {
+        require(tokenIds.length > 0, "No NFTs provided for unstaking");
+
         StakerInfo storage staker = stakers[msg.sender];
-        uint256 totalRewards = 0;
+        uint256 totalRewards = _calculateRewards(staker);
 
         for (uint256 i = 0; i < tokenIds.length; i++) {
             uint256 tokenId = tokenIds[i];
-            require(nftOwners[tokenId] == msg.sender, "Not the staker");
-            stakableNFT.transferFrom(address(this), msg.sender, tokenId);
+            require(nftOwners[tokenId] == msg.sender, "Caller is not the owner of this NFT");
+
+            // Initiate unbonding period
             unbondingTime[tokenId] = block.timestamp;
-            staker.stakedNFTs = _removeNFT(staker.stakedNFTs, tokenId);
+            _removeNFT(staker.stakedNFTs, tokenId);
+            delete nftOwners[tokenId];
+
+            stakableNFT.transferFrom(address(this), msg.sender, tokenId);
         }
 
-        totalRewards = staker.stakedNFTs.length * rewardPerBlock * (block.number - staker.lastClaimBlock);
         staker.rewardDebt += totalRewards;
         staker.lastClaimBlock = block.number;
 
@@ -78,9 +90,9 @@ contract NFTStaking is Initializable, UUPSUpgradeable, Ownable, Pausable {
 
     function claimRewards() external whenNotPaused {
         StakerInfo storage staker = stakers[msg.sender];
-        require(block.timestamp >= staker.lastClaimBlock + delayPeriod, "Delay period not met");
+        require(block.timestamp >= staker.lastClaimBlock + delayPeriod, "Claim period not reached");
 
-        uint256 totalRewards = staker.rewardDebt;
+        uint256 totalRewards = staker.rewardDebt + _calculateRewards(staker);
         staker.rewardDebt = 0;
         staker.lastClaimBlock = block.number;
 
@@ -105,18 +117,19 @@ contract NFTStaking is Initializable, UUPSUpgradeable, Ownable, Pausable {
         delayPeriod = _delayPeriod;
     }
 
-    function _removeNFT(uint256[] storage array, uint256 value) internal returns (uint256[] storage) {
+    function _calculateRewards(StakerInfo storage staker) internal view returns (uint256) {
+        return staker.stakedNFTs.length * rewardPerBlock * (block.number - staker.lastClaimBlock);
+    }
+
+    function _removeNFT(uint256[] storage array, uint256 tokenId) internal {
         uint256 index = 0;
         for (uint256 i = 0; i < array.length; i++) {
-            if (array[i] == value) {
+            if (array[i] == tokenId) {
                 index = i;
                 break;
             }
         }
-
         array[index] = array[array.length - 1];
         array.pop();
-
-        return array;
     }
 }
