@@ -9,25 +9,32 @@ import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 
 contract NFTStaking is Initializable, UUPSUpgradeable, Ownable, Pausable {
-    IERC20 public rewardToken;
-    IERC721 public stakableNFT;
-    uint256 public rewardPerBlock;
-    uint256 public delayPeriod;
+    IERC20 public rewardToken; // ERC20 token used for rewards
+    IERC721 public stakableNFT; // ERC721 token that can be staked
+    uint256 public rewardPerBlock; // Reward per block for each staked NFT
+    uint256 public delayPeriod; // Delay period for claiming rewards
 
+    // Information about each staker
     struct StakerInfo {
-        uint256[] stakedNFTs;
-        uint256 rewardDebt;
-        uint256 lastClaimBlock;
+        uint256[] stakedNFTs; // Array of staked NFT IDs
+        uint256 rewardDebt; // Accumulated rewards not yet claimed
+        uint256 lastClaimBlock; // Block number of the last claim
     }
-
+    // Mapping from staker address to their information
     mapping(address => StakerInfo) public stakers;
+
+    // Mapping from NFT ID to the owner address
     mapping(uint256 => address) public nftOwners;
+
+    // Mapping from NFT ID to the unbonding time (timestamp)
     mapping(uint256 => uint256) public unbondingTime;
 
+    // Events to log staking, unstaking, and claiming rewards
     event Staked(address indexed user, uint256[] tokenIds);
     event Unstaked(address indexed user, uint256[] tokenIds);
     event RewardsClaimed(address indexed user, uint256 rewardAmount);
 
+    /// @dev Initializer function (replaces constructor for upgradeable contracts)
     function initialize(
         IERC20 _rewardToken,
         IERC721 _stakableNFT,
@@ -43,8 +50,13 @@ contract NFTStaking is Initializable, UUPSUpgradeable, Ownable, Pausable {
         __UUPSUpgradeable_init();
     }
 
+    /// @dev Authorize contract upgrade (UUPS pattern)
+    /// @param newImplementation Address of the new implementation contract
+
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
+    /// @dev Stake NFTs to earn rewards
+    /// @param tokenIds Array of NFT IDs to be staked
     function stake(uint256[] calldata tokenIds) external whenNotPaused {
         require(tokenIds.length > 0, "No NFTs provided for staking");
 
@@ -64,6 +76,8 @@ contract NFTStaking is Initializable, UUPSUpgradeable, Ownable, Pausable {
         emit Staked(msg.sender, tokenIds);
     }
 
+    /// @dev Unstake NFTs
+    /// @param tokenIds Array of NFT IDs to be unstaked
     function unstake(uint256[] calldata tokenIds) external whenNotPaused {
         require(tokenIds.length > 0, "No NFTs provided for unstaking");
 
@@ -88,6 +102,7 @@ contract NFTStaking is Initializable, UUPSUpgradeable, Ownable, Pausable {
         emit Unstaked(msg.sender, tokenIds);
     }
 
+    /// @dev Claim accumulated rewards
     function claimRewards() external whenNotPaused {
         StakerInfo storage staker = stakers[msg.sender];
         require(block.timestamp >= staker.lastClaimBlock + delayPeriod, "Claim period not reached");
@@ -101,6 +116,7 @@ contract NFTStaking is Initializable, UUPSUpgradeable, Ownable, Pausable {
         emit RewardsClaimed(msg.sender, totalRewards);
     }
 
+    /// @dev Pause and unpause the contract (only owner can call)
     function pause() external onlyOwner {
         _pause();
     }
@@ -109,18 +125,29 @@ contract NFTStaking is Initializable, UUPSUpgradeable, Ownable, Pausable {
         _unpause();
     }
 
+
+    /// @dev Update the reward per block (only owner can call)
+    /// @param _rewardPerBlock New reward amount per block
     function updateRewardPerBlock(uint256 _rewardPerBlock) external onlyOwner {
         rewardPerBlock = _rewardPerBlock;
     }
 
+    /// @dev Update the delay period for claiming rewards (only owner can call)
+    /// @param _delayPeriod New delay period in seconds
     function updateDelayPeriod(uint256 _delayPeriod) external onlyOwner {
         delayPeriod = _delayPeriod;
     }
 
+    /// @dev Calculate rewards for a staker
+    /// @param staker StakerInfo struct of the staker
+    /// @return Total rewards accumulated since the last claim
     function _calculateRewards(StakerInfo storage staker) internal view returns (uint256) {
         return staker.stakedNFTs.length * rewardPerBlock * (block.number - staker.lastClaimBlock);
     }
 
+    /// @dev Remove an NFT from the staker's array of staked NFTs
+    /// @param array Array of staked NFTs
+    /// @param tokenId ID of the NFT to be removed
     function _removeNFT(uint256[] storage array, uint256 tokenId) internal {
         uint256 index = 0;
         for (uint256 i = 0; i < array.length; i++) {
